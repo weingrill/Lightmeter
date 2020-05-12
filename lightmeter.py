@@ -1,11 +1,37 @@
 #!/usr/bin/env python3
 
-import usb.core as usb
-import usb.util as util
+import usb.core
+import usb.util
 import attr
 from time import sleep, time
 from datetime import datetime, timezone
 from lightmeter_table import jsonSchemaPrefix
+import signal
+from influxdb import InfluxDBClient
+
+class GracefulKiller:
+    """
+    Class to react on termination signal from the operating system
+    """
+    kill_now = False
+
+    def __init__(self):
+        """
+        connect the SIGINT and SIGTERM signals
+        """
+        signal.signal(signal.SIGINT, self.exit_gracefully)
+        signal.signal(signal.SIGTERM, self.exit_gracefully)
+
+    def exit_gracefully(self, signum, frame):
+        """
+        just sets the flag, that the process has to terminate now
+        :param signum: will be ignored gracefully
+        :param frame: will also be ignored gracefully
+        :return:
+        """
+        self.kill_now = True
+
+
 
 class Lightmeter:
     """An instance of a Kuffner-Sternwarte lightmeter. Call `read` to read the
@@ -45,6 +71,45 @@ class Lightmeter:
     def __init__(self):
         self._endpoints = Lightmeter._initDevice()
 
+    def connect_db(self):
+        """
+        connect the client to the database
+        :return:
+        """
+        self.client = InfluxDBClient('localhost', 8086,
+                                     username='',
+                                     password='',
+                                     database='lightmeterdb')
+
+        # if database does not exist, create the bmkdb. This does not overwrite an existing database
+        self.client.create_database('lightmeterdb')
+
+    def write_database(self, reading):
+        """
+        reads all variables from the input variable dictionary.
+        compiles the JSON body
+        write the data into the database
+        :param variabledict: input variable dictionary
+        :return:
+        """
+        json_body = [
+            {
+                "measurement": "Lightmeter",
+                "tags": {
+                    "host": "Mark 2.3 V05.05",
+                    "serial": "908026.1447"
+                },
+                "time": reading.utc.isoformat(),
+                "fields": {
+                    "temperature": reading.temperature,
+                    "lightlevel": reading.lightlevel,
+                    "daylight": reading.daylight,
+                    "status": reading.status
+                }
+            }
+        ]
+        self.client.write_points(json_body)
+
     def read(self):
         """Returns an instance of Lightmeter.Reading holding the current readings."""
         utc = datetime.now(timezone.utc)
@@ -67,7 +132,7 @@ class Lightmeter:
         }
 
         # find our device
-        dev = usb.find(idVendor=lightmeterParams['idVendor'],
+        dev = usb.core.find(idVendor=lightmeterParams['idVendor'],
                     idProduct=lightmeterParams['idProduct'])
 
         # was it found?
@@ -78,7 +143,7 @@ class Lightmeter:
         # configuration will be the active one
         try:
             dev.set_configuration(lightmeterParams['configuration'])
-        except usb.USBError as e:
+        except usb.core.USBError as e:
             # if there are permission problems, this is where they manifest;
             # attach the bus and address so that outer code can print an
             # informative message.
@@ -90,19 +155,19 @@ class Lightmeter:
         cfg = dev.get_active_configuration()
         intf = cfg[lightmeterParams['interface']]
 
-        endpointOut = util.find_descriptor(
+        endpointOut = usb.util.find_descriptor(
             intf,
             # match the first OUT endpoint
             custom_match = lambda e: \
                 usb.util.endpoint_direction(e.bEndpointAddress) \
-                == util.ENDPOINT_OUT)
+                == usb.util.ENDPOINT_OUT)
 
-        endpointIn = util.find_descriptor(
+        endpointIn = usb.util.find_descriptor(
             intf,
             # match the first IN endpoint
             custom_match = lambda e: \
                 usb.util.endpoint_direction(e.bEndpointAddress) \
-                == util.ENDPOINT_IN)
+                == usb.util.ENDPOINT_IN)
 
         if endpointOut is None or endpointIn is None:
             raise RuntimeError('Unable to open endpoints')
@@ -127,7 +192,10 @@ class Lightmeter:
             for the TMB-package.
             Code from the Kuffner-Sternwarte web site.
         """
-        Chr = Ch1 / Ch0
+        if Ch0>0:
+            Chr = Ch1 / Ch0
+        else:
+            return 0.0
         # Apply calibration recommended by manufacturer for different channel-ratios (IR-correction for vis-sensor to get Lux)
         if Chr <= 0.50:                        Lux=0.0304  *Ch0  - 0.062*Ch0*(Ch1/Ch0)**1.4
         elif (0.50 < Chr) and (Chr  <= 0.61):  Lux=0.0224  *Ch0  - 0.031  *Ch1
@@ -183,7 +251,7 @@ if __name__ == '__main__':
     parser.add_argument('--nohw', action='store_true',
                         help='don\'t use hardware and instead generate mock readings for testing')
     parser.add_argument('-f', '--format', default='text',
-                        choices=('text', 'json_table', 'json_lines', 'json_lines_long'),
+                        choices=('text', 'json_table', 'json_lines', 'json_lines_long', 'none'),
                         help='output format')
 
     args = parser.parse_args()
@@ -213,7 +281,10 @@ if __name__ == '__main__':
         def finish():
             print('\n]}')
 
-    while True:
+    lmeter.connect_db()
+    killer = GracefulKiller()
+
+    while not killer.kill_now:
         l = lmeter.read()
         if args.format == 'text':
             print(l.utc, int(l.utc.timestamp()),
@@ -228,4 +299,7 @@ if __name__ == '__main__':
         elif args.format == 'json_table':
             print(printComma, l.json(abbrev=True), end='', sep='\n', flush=True)
             printComma = ','
-        sleep(args.interval * 60)
+        elif args.format == 'none':
+            pass # maybe used for logger in future
+        lmeter.write_database(l)
+        sleep(args.interval)
