@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from lightmeter_table import jsonSchemaPrefix
 import signal
 from influxdb import InfluxDBClient
+from math import exp
+
+a = 1.4434e+05
+b = 3.25274e-03
+c = 1.3120e-08
+d = 5.2776e-03
 
 class GracefulKiller:
     """
@@ -104,6 +110,8 @@ class Lightmeter:
                     "temperature": reading.temperature,
                     "lightlevel": reading.lightlevel,
                     "daylight": reading.daylight,
+                    "lux": a * reading.lightlevel,
+                    "watts":  c * (b * (a * exp(reading.lightlevel * (1.0 + d*reading.temperature)/a) - 1.0) + reading.lightlevel),
                     "status": reading.status
                 }
             }

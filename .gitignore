@@ -1,3 +1,7 @@
 venv/
 __pycache__/
 *.pyc
+lightmeter.log
+lightmeter.err
+lightmeter.info
+
