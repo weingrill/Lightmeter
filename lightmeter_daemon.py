@@ -15,10 +15,10 @@ def main_program():
         if e.errno != 13:
                 raise e
         logging.exception(e, file=sys.stderr)
-        logging.warning('Set read/write permissions on device node '
+        logging.error('Set read/write permissions on device node '
             '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus,e.address),
             file=sys.stderr)
-        logging.warning('Alternatively, use udev to fix this permanently.')
+        logging.error('Alternatively, use udev to fix this permanently.')
         exit(1)
     logging.debug('connecting database')
     lmeter.connect_db()
@@ -51,4 +51,4 @@ if __name__ == '__main__':
     stdin.close()
     stdout.close()
     stderr.close()
-    logging.info('leaving context')
+    logging.debug('leaving context')

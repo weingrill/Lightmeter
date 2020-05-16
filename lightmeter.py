@@ -85,7 +85,8 @@ class Lightmeter:
         self.client = InfluxDBClient('localhost', 8086,
                                      username='',
                                      password='',
-                                     database='lightmeterdb')
+                                     database='lightmeterdb',
+                                     timeout=20)
 
         # if database does not exist, create the bmkdb. This does not overwrite an existing database
         self.client.create_database('lightmeterdb')
