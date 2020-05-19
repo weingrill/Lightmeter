@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 import daemon
 import logging
+import usb.core
 from time import sleep
 from lightmeter import Lightmeter
 
-logging.basicConfig(filename='lightmeter.log',level=logging.DEBUG)
+logging.basicConfig(filename='lightmeter.log',level=logging.DEBUG, format='%(asctime)s %(message)s')
 
 def main_program():
     logging.debug('main_program()')
     try:
         logging.info('connecting lightmeter')
         lmeter = Lightmeter()
-    except usb.USBError as e:
+    except usb.core.USBError as e:
         if e.errno != 13:
                 raise e
         logging.exception(e, file=sys.stderr)

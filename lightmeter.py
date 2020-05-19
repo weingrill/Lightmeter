@@ -4,16 +4,22 @@ import usb.core
 import usb.util
 import attr
 from time import sleep, time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from lightmeter_table import jsonSchemaPrefix
 import signal
 from influxdb import InfluxDBClient
 from math import exp
+import logging
+
+logging.basicConfig(filename='lightmeter.log',level=logging.DEBUG, format='%(asctime)s %(message)s')
+
 
 a = 1.4434e+05
 b = 3.25274e-03
 c = 1.3120e-08
 d = 5.2776e-03
+
+PYUSB_DEBUG = 'debug'
 
 class GracefulKiller:
     """
@@ -82,6 +88,7 @@ class Lightmeter:
         connect the client to the database
         :return:
         """
+        logging.debug('connecting database')
         self.client = InfluxDBClient('localhost', 8086,
                                      username='',
                                      password='',
@@ -89,6 +96,7 @@ class Lightmeter:
                                      timeout=20)
 
         # if database does not exist, create the bmkdb. This does not overwrite an existing database
+        logging.debug('creating database')
         self.client.create_database('lightmeterdb')
 
     def write_database(self, reading):
@@ -117,13 +125,26 @@ class Lightmeter:
                 }
             }
         ]
+        logging.debug('writing database')
         self.client.write_points(json_body)
 
     def read(self):
         """Returns an instance of Lightmeter.Reading holding the current readings."""
         utc = datetime.now(timezone.utc)
-        L, daylight, isOK = Lightmeter._readLight(self._endpoints)
-        T = Lightmeter._readTemperature(self._endpoints)
+        try:
+            L, daylight, isOK = Lightmeter._readLight(self._endpoints)
+        except RuntimeError as e:
+            logging.exception(e)
+            L = 0
+            daylight = 0.0
+            isOK = False
+        try:
+            T = Lightmeter._readTemperature(self._endpoints)
+        except RuntimeError as e:
+            logging.exception(e)
+            T = 0.0
+            isOK = False
+
         return Lightmeter.Reading(utc=utc, lightlevel=L,
                                   daylight=daylight, temperature=T,
                                   status=isOK)
@@ -188,10 +209,10 @@ class Lightmeter:
         endpointIn, endpointOut = endpoints
         N = endpointOut.write('T')
         if N != 1:
-            raise RuntimeError('USB write error')
+            raise RuntimeError('USB temperature write error')
         raw = endpointIn.read(2)
         if len(raw) != 2:
-            raise RuntimeError('USB read error')
+            raise RuntimeError('USB temperature read error')
         # Throw away 3 status bits and convert to decimal.
         return (raw[0] // 8 + raw[1] * 32) / 16
 
@@ -221,10 +242,10 @@ class Lightmeter:
         endpointIn, endpointOut = endpoints
         N = endpointOut.write('L')
         if N != 1:
-            raise RuntimeError('USB write error')
+            raise RuntimeError('USB lightlevel write error')
         raw = endpointIn.read(7)
         if len(raw) != 7:
-            raise RuntimeError('USB read error')
+            raise RuntimeError('USB lightlevel read error')
         factors = (None, 120, 8, 4, 2, 1)
         measurementRange = raw[2]
         TslMw0 = 256 * raw[4] + raw[3];
@@ -294,6 +315,7 @@ if __name__ == '__main__':
     killer = GracefulKiller()
 
     while not killer.kill_now:
+        starttime = datetime.now()
         l = lmeter.read()
         if args.format == 'text':
             print(l.utc, int(l.utc.timestamp()),
@@ -311,4 +333,5 @@ if __name__ == '__main__':
         elif args.format == 'none':
             pass # maybe used for logger in future
         lmeter.write_database(l)
-        sleep(args.interval)
+        while starttime + timedelta(seconds=args.interval)>datetime.now():
+            pass
