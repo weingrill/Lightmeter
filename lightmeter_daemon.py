@@ -5,7 +5,9 @@ import usb.core
 from time import sleep
 from lightmeter import Lightmeter
 
-logging.basicConfig(filename='lightmeter.log',level=logging.DEBUG, format='%(asctime)s %(message)s')
+logging.basicConfig(filename='lightmeter.log',
+                    level=logging.DEBUG,
+                    format='%(asctime)s %(message)s')
 
 def main_program():
     logging.debug('main_program()')

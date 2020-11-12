@@ -4,15 +4,16 @@ import usb.core
 import usb.util
 import attr
 from time import sleep, time
-from datetime import datetime, timezone, timedelta
+import datetime as dt
 from lightmeter_table import jsonSchemaPrefix
 import signal
-from influxdb import InfluxDBClient
+from influxdb import InfluxDBClient, exceptions
 from math import exp
 import logging
+from logging.config import fileConfig
 
-logging.basicConfig(filename='lightmeter.log',level=logging.DEBUG, format='%(asctime)s %(message)s')
-
+fileConfig('logging_config.ini')
+logger = logging.getLogger()
 
 a = 1.4434e+05
 b = 3.25274e-03
@@ -81,6 +82,7 @@ class Lightmeter:
             return '{{{}}}'.format(line)
 
     def __init__(self):
+
         self._endpoints = Lightmeter._initDevice()
 
     def connect_db(self):
@@ -88,15 +90,15 @@ class Lightmeter:
         connect the client to the database
         :return:
         """
-        logging.debug('connecting database')
+        logger.debug('connecting database')
         self.client = InfluxDBClient('localhost', 8086,
                                      username='',
                                      password='',
                                      database='lightmeterdb',
-                                     timeout=20)
+                                     timeout=300)
 
         # if database does not exist, create the bmkdb. This does not overwrite an existing database
-        logging.debug('creating database')
+        logger.debug('creating database')
         self.client.create_database('lightmeterdb')
 
     def write_database(self, reading):
@@ -107,6 +109,16 @@ class Lightmeter:
         :param variabledict: input variable dictionary
         :return:
         """
+        def none_str(value):
+            if value is None:
+                return ''
+            return str(value)
+
+        if reading.temperature is None:
+            watts = c * (b * (a * exp(reading.lightlevel/a) - 1.0) + reading.lightlevel)
+        else:
+            watts = c * (b * (a * exp(reading.lightlevel * (1.0 + d*reading.temperature)/a) - 1.0) + reading.lightlevel)
+
         json_body = [
             {
                 "measurement": "Lightmeter",
@@ -120,30 +132,39 @@ class Lightmeter:
                     "lightlevel": reading.lightlevel,
                     "daylight": reading.daylight,
                     "lux": a * reading.lightlevel,
-                    "watts":  c * (b * (a * exp(reading.lightlevel * (1.0 + d*reading.temperature)/a) - 1.0) + reading.lightlevel),
+                    "watts":  watts,
                     "status": reading.status
                 }
             }
         ]
-        logging.debug('writing database')
-        self.client.write_points(json_body)
+        if reading.temperature is None:
+            json_body[0]["fields"].pop("temperature")
+        logger.debug('writing database')
+        try:
+            self.client.write_points(json_body)
+        except exceptions.InfluxDBServerError:
+            logger.exception('write_points failed')
 
     def read(self):
         """Returns an instance of Lightmeter.Reading holding the current readings."""
-        utc = datetime.now(timezone.utc)
+        utc = dt.datetime.now(dt.timezone.utc)
         try:
             L, daylight, isOK = Lightmeter._readLight(self._endpoints)
         except RuntimeError as e:
-            logging.exception(e)
-            L = 0
-            daylight = 0.0
+            logger.exception(e)
+            L = None
+            daylight = None
             isOK = False
-        try:
-            T = Lightmeter._readTemperature(self._endpoints)
-        except RuntimeError as e:
-            logging.exception(e)
-            T = 0.0
-            isOK = False
+        if dt.datetime.now().time() < dt.time(4, 0, 0) or \
+            dt.datetime.now().time() >= dt.time(16, 0, 0):
+            try:
+                T = Lightmeter._readTemperature(self._endpoints)
+            except RuntimeError as e:
+                logger.exception(e)
+                T = None
+                isOK = False
+        else:
+            T = None
 
         return Lightmeter.Reading(utc=utc, lightlevel=L,
                                   daylight=daylight, temperature=T,
@@ -314,13 +335,20 @@ if __name__ == '__main__':
     lmeter.connect_db()
     killer = GracefulKiller()
 
+    def none_str_fmt(value, format_string):
+        if value is None:
+            return 'N/A'
+        return format_string.format(value)
+
     while not killer.kill_now:
-        starttime = datetime.now()
+        starttime = dt.datetime.now()
         l = lmeter.read()
         if args.format == 'text':
-            print(l.utc, int(l.utc.timestamp()),
-                  '{:.1f}'.format(l.temperature), l.lightlevel,
-                  '{:.3g}'.format(l.daylight),
+            print(l.utc,
+                  int(l.utc.timestamp()),
+                  none_str_fmt(l.temperature, '{:.1f}'),
+                  l.lightlevel,
+                  none_str_fmt(l.daylight, '{:.3g}'),
                   ('OK' if l.status else 'ERROR'),
                   flush=True)
         elif args.format == 'json_lines':
@@ -333,5 +361,5 @@ if __name__ == '__main__':
         elif args.format == 'none':
             pass # maybe used for logger in future
         lmeter.write_database(l)
-        while starttime + timedelta(seconds=args.interval)>datetime.now():
+        while starttime + dt.timedelta(seconds=args.interval)>dt.datetime.now():
             pass
