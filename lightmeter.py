@@ -3,7 +3,6 @@
 import usb.core
 import usb.util
 import attr
-from time import sleep, time
 import datetime as dt
 from lightmeter_table import jsonSchemaPrefix
 import signal
@@ -11,6 +10,8 @@ from influxdb import InfluxDBClient, exceptions
 from math import exp
 import logging
 from logging.config import fileConfig
+import sys
+import argparse
 
 fileConfig('logging_config.ini')
 logger = logging.getLogger()
@@ -20,7 +21,6 @@ b = 3.25274e-03
 c = 1.3120e-08
 d = 5.2776e-03
 
-PYUSB_DEBUG = 'debug'
 
 class GracefulKiller:
     """
@@ -43,7 +43,6 @@ class GracefulKiller:
         :return:
         """
         self.kill_now = True
-
 
 
 class Lightmeter:
@@ -82,8 +81,9 @@ class Lightmeter:
             return '{{{}}}'.format(line)
 
     def __init__(self):
-
-        self._endpoints = Lightmeter._initDevice()
+        self.client = None
+        self._endpoints = Lightmeter._init_device()
+        self.suspend_time_utc = dt.datetime.now(dt.timezone.utc)
 
     def connect_db(self):
         """
@@ -106,18 +106,14 @@ class Lightmeter:
         reads all variables from the input variable dictionary.
         compiles the JSON body
         write the data into the database
-        :param variabledict: input variable dictionary
         :return:
         """
-        def none_str(value):
-            if value is None:
-                return ''
-            return str(value)
 
         if reading.temperature is None:
-            watts = c * (b * (a * exp(reading.lightlevel/a) - 1.0) + reading.lightlevel)
+            watts = c * (b * (a * exp(reading.lightlevel / a) - 1.0) + reading.lightlevel)
         else:
-            watts = c * (b * (a * exp(reading.lightlevel * (1.0 + d*reading.temperature)/a) - 1.0) + reading.lightlevel)
+            watts = c * (b * (
+                        a * exp(reading.lightlevel * (1.0 + d * reading.temperature) / a) - 1.0) + reading.lightlevel)
 
         json_body = [
             {
@@ -132,7 +128,7 @@ class Lightmeter:
                     "lightlevel": reading.lightlevel,
                     "daylight": reading.daylight,
                     "lux": a * reading.lightlevel,
-                    "watts":  watts,
+                    "watts": watts,
                     "status": reading.status
                 }
             }
@@ -149,32 +145,37 @@ class Lightmeter:
         """Returns an instance of Lightmeter.Reading holding the current readings."""
         utc = dt.datetime.now(dt.timezone.utc)
         try:
-            L, daylight, isOK = Lightmeter._readLight(self._endpoints)
-        except RuntimeError as e:
-            logger.exception(e)
-            L = None
+            lightlevel, daylight, is_ok = Lightmeter._read_light(self._endpoints)
+        except RuntimeError as read_lightexception:
+            logger.exception(read_lightexception)
+            lightlevel = None
             daylight = None
-            isOK = False
-        if dt.datetime.now().time() < dt.time(4, 0, 0) or \
-            dt.datetime.now().time() >= dt.time(16, 0, 0):
+            is_ok = False
+        if utc > self.suspend_time_utc:
             try:
-                T = Lightmeter._readTemperature(self._endpoints)
-            except RuntimeError as e:
-                logger.exception(e)
-                T = None
-                isOK = False
+                temperature = Lightmeter._read_temperature(self._endpoints)
+            except RuntimeError as temperature_exception:
+                logger.exception(temperature_exception)
+                temperature = None
+                is_ok = False
+            else:
+                self.suspend_time_utc = utc
         else:
-            T = None
-
-        return Lightmeter.Reading(utc=utc, lightlevel=L,
-                                  daylight=daylight, temperature=T,
-                                  status=isOK)
+            temperature = None
+        if temperature < 35.0:
+            self.suspend_time_utc = utc
+        else:   # wait for eight hours
+            self.suspend_time_utc = utc + dt.timedelta(hours=12)
+            logger.warning('suspending temperature readout until %s', self.suspend_time_utc.isoformat())
+        return Lightmeter.Reading(utc=utc, lightlevel=lightlevel,
+                                  daylight=daylight, temperature=temperature,
+                                  status=is_ok)
 
     @staticmethod
-    def _initDevice():
+    def _init_device():
         """Finds a Microchip PICDEM, which is what the lightmeter identifies as,
         sadly. Not robust, but I can see no better way."""
-        lightmeterParams = {
+        lightmeter_params = {
             'idVendor': 0x04d8,
             'idProduct': 0x000c,
             'configuration': 1,
@@ -183,8 +184,8 @@ class Lightmeter:
         }
 
         # find our device
-        dev = usb.core.find(idVendor=lightmeterParams['idVendor'],
-                    idProduct=lightmeterParams['idProduct'])
+        dev = usb.core.find(idVendor=lightmeter_params['idVendor'],
+                            idProduct=lightmeter_params['idProduct'])
 
         # was it found?
         if dev is None:
@@ -193,106 +194,95 @@ class Lightmeter:
         # set the active configuration. With no arguments, the first
         # configuration will be the active one
         try:
-            dev.set_configuration(lightmeterParams['configuration'])
-        except usb.core.USBError as e:
+            dev.set_configuration(lightmeter_params['configuration'])
+        except usb.core.USBError as usb_exception:
             # if there are permission problems, this is where they manifest;
             # attach the bus and address so that outer code can print an
             # informative message.
-            e.bus = dev.bus
-            e.address = dev.address
-            raise e
+            usb_exception.bus = dev.bus
+            usb_exception.address = dev.address
+            raise usb_exception
 
         # get an endpoint instance
         cfg = dev.get_active_configuration()
-        intf = cfg[lightmeterParams['interface']]
+        intf = cfg[lightmeter_params['interface']]
 
-        endpointOut = usb.util.find_descriptor(
+        endpoint_out = usb.util.find_descriptor(
             intf,
             # match the first OUT endpoint
-            custom_match = lambda e: \
-                usb.util.endpoint_direction(e.bEndpointAddress) \
-                == usb.util.ENDPOINT_OUT)
+            custom_match=lambda cm: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT)
 
-        endpointIn = usb.util.find_descriptor(
+        endpoint_in = usb.util.find_descriptor(
             intf,
             # match the first IN endpoint
-            custom_match = lambda e: \
-                usb.util.endpoint_direction(e.bEndpointAddress) \
-                == usb.util.ENDPOINT_IN)
+            custom_match=lambda cm: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN)
 
-        if endpointOut is None or endpointIn is None:
+        if endpoint_out is None or endpoint_in is None:
             raise RuntimeError('Unable to open endpoints')
 
-        return endpointIn, endpointOut
+        return endpoint_in, endpoint_out
 
     @staticmethod
-    def _readTemperature(endpoints):
-        endpointIn, endpointOut = endpoints
-        N = endpointOut.write('T')
-        if N != 1:
+    def _read_temperature(endpoints):
+        endpoint_in, endpoint_out = endpoints
+        n = endpoint_out.write('T')
+        if n != 1:
             raise RuntimeError('USB temperature write error')
-        raw = endpointIn.read(2)
+        raw = endpoint_in.read(2)
         if len(raw) != 2:
             raise RuntimeError('USB temperature read error')
         # Throw away 3 status bits and convert to decimal.
         return (raw[0] // 8 + raw[1] * 32) / 16
 
     @staticmethod
-    def _luxFromDaysensor(Ch0, Ch1):
+    def _lux_from_daysensor(channel0, channel1):
         """ Calculates Lux from the TAOS, www.taosinc.com TSL2560/TSL2561 two band light sensor
             for the TMB-package.
             Code from the Kuffner-Sternwarte web site.
         """
-        if Ch0>0:
-            Chr = Ch1 / Ch0
+        if channel0 > 0:
+            channel_ratio = channel1 / channel0
         else:
             return 0.0
-        # Apply calibration recommended by manufacturer for different channel-ratios (IR-correction for vis-sensor to get Lux)
-        if Chr <= 0.50:                        Lux=0.0304  *Ch0  - 0.062*Ch0*(Ch1/Ch0)**1.4
-        elif (0.50 < Chr) and (Chr  <= 0.61):  Lux=0.0224  *Ch0  - 0.031  *Ch1
-        elif (0.61 < Chr) and (Chr  <= 0.80):  Lux=0.0128  *Ch0  - 0.0153 *Ch1
-        elif (0.80 < Chr) and (Chr  <= 1.30):  Lux=0.00146*Ch0  - 0.00112*Ch1
-        elif 1.30 < Chr:                       Lux=0
-        else: raise RuntimeError("Invalid daysensor channel ratio.")
+        # Apply calibration recommended by manufacturer for different channel-ratios
+        # (IR-correction for vis-sensor to get Lux)
+        if channel_ratio <= 0.50:
+            lux = 0.0304 * channel0 - 0.062 * channel0 * (channel1 / channel0) ** 1.4
+        elif (0.50 < channel_ratio) and (channel_ratio <= 0.61):
+            lux = 0.0224 * channel0 - 0.031 * channel1
+        elif (0.61 < channel_ratio) and (channel_ratio <= 0.80):
+            lux = 0.0128 * channel0 - 0.0153 * channel1
+        elif (0.80 < channel_ratio) and (channel_ratio <= 1.30):
+            lux = 0.00146 * channel0 - 0.00112 * channel1
+        elif 1.30 < channel_ratio:
+            lux = 0
+        else:
+            raise RuntimeError("Invalid daysensor channel ratio.")
         # calibration with Voltcraft handheld vs. Lightmeter Mark 2.3 No. L001 TAOS-daysensor
-        Faktor = 21.0
-        return Lux*Faktor
+        factor = 21.0
+        return lux * factor
 
     @staticmethod
-    def _readLight(endpoints):
-        endpointIn, endpointOut = endpoints
-        N = endpointOut.write('L')
-        if N != 1:
+    def _read_light(endpoints):
+        endpoint_in, endpoint_out = endpoints
+        n = endpoint_out.write('L')
+        if n != 1:
             raise RuntimeError('USB lightlevel write error')
-        raw = endpointIn.read(7)
+        raw = endpoint_in.read(7)
         if len(raw) != 7:
             raise RuntimeError('USB lightlevel read error')
         factors = (None, 120, 8, 4, 2, 1)
-        measurementRange = raw[2]
-        TslMw0 = 256 * raw[4] + raw[3];
-        TslMw1 = 256 * raw[6] + raw[5];
-        rawReading = 256 * raw[1] + raw[0]
-        reading = rawReading * factors[measurementRange]
-        isOK = rawReading < 32000
-        daylight = Lightmeter._luxFromDaysensor(TslMw0, TslMw1)
-        return reading, daylight, isOK
+        measurement_range = raw[2]
+        low_word = 256 * raw[4] + raw[3]
+        high_word = 256 * raw[6] + raw[5]
+        raw_reading = 256 * raw[1] + raw[0]
+        reading = raw_reading * factors[measurement_range]
+        is_ok = raw_reading < 32000
+        daylight = Lightmeter._lux_from_daysensor(low_word, high_word)
+        return reading, daylight, is_ok
 
-class _MockLightmeter:
-    """For testing."""
-
-    def read(self):
-        from random import randrange, choice
-        """Returns an instance of Lightmeter.Reading holding the current readings."""
-        utc = datetime.now(timezone.utc)
-        return Lightmeter.Reading(utc=utc,
-                                  lightlevel=randrange(1000, 100000),
-                                  daylight=randrange(1,1000),
-                                  temperature=float(randrange(-20,40)),
-                                  status=choice((True, False)))
 
 if __name__ == '__main__':
-    import sys
-    import argparse
 
     parser = argparse.ArgumentParser(description='Read light level from a '
                                                  'Kuffner-Sternwarte lightmeter '
@@ -301,24 +291,27 @@ if __name__ == '__main__':
                         help='sampling interval in minutes (can be fractional)')
     parser.add_argument('--nohw', action='store_true',
                         help='don\'t use hardware and instead generate mock readings for testing')
+    parser.add_argument('--debug', action='store_true',
+                        help='enable USB debug mode')
     parser.add_argument('-f', '--format', default='text',
                         choices=('text', 'json_table', 'json_lines', 'json_lines_long', 'none'),
                         help='output format')
 
     args = parser.parse_args()
+    if args.debug:
+        PYUSB_DEBUG = 'debug'
 
+    lmeter = None
+    printComma = ''
     try:
-        if args.nohw:
-            lmeter = _MockLightmeter()
-        else:
-            lmeter = Lightmeter()
+        lmeter = Lightmeter()
     except usb.USBError as e:
         if e.errno != 13:
-                raise e
+            raise e
         print(e, file=sys.stderr)
         print('Set read/write permissions on device node '
-            '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus,e.address),
-            file=sys.stderr)
+              '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus, e.address),
+              file=sys.stderr)
         print('Alternatively, use udev to fix this permanently.')
         exit(1)
 
@@ -326,14 +319,18 @@ if __name__ == '__main__':
         print('# DATE_UTC TIME_UTC UNIX_EPOCH T_CELSIUS LIGHTMETER_COUNTS DAYLIGHT_LUX STATUS')
     elif args.format == 'json_table':
         import atexit
+
         print(jsonSchemaPrefix, end='')
         printComma = ''
+
+
         @atexit.register
         def finish():
             print('\n]}')
 
     lmeter.connect_db()
     killer = GracefulKiller()
+
 
     def none_str_fmt(value, format_string):
         if value is None:
@@ -359,7 +356,7 @@ if __name__ == '__main__':
             print(printComma, l.json(abbrev=True), end='', sep='\n', flush=True)
             printComma = ','
         elif args.format == 'none':
-            pass # maybe used for logger in future
+            pass  # maybe used for logger in future
         lmeter.write_database(l)
-        while starttime + dt.timedelta(seconds=args.interval)>dt.datetime.now():
+        while starttime + dt.timedelta(seconds=args.interval) > dt.datetime.now():
             pass
