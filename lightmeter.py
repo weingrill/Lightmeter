@@ -210,12 +210,12 @@ class Lightmeter:
         endpoint_out = usb.util.find_descriptor(
             intf,
             # match the first OUT endpoint
-            custom_match=lambda cm: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT)
+            custom_match=lambda cm: usb.util.endpoint_direction(cm.bEndpointAddress) == usb.util.ENDPOINT_OUT)
 
         endpoint_in = usb.util.find_descriptor(
             intf,
             # match the first IN endpoint
-            custom_match=lambda cm: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_IN)
+            custom_match=lambda cm: usb.util.endpoint_direction(cm.bEndpointAddress) == usb.util.ENDPOINT_IN)
 
         if endpoint_out is None or endpoint_in is None:
             raise RuntimeError('Unable to open endpoints')
