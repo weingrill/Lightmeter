@@ -4,6 +4,7 @@ import logging
 import usb.core
 from time import sleep
 from lightmeter import Lightmeter
+import sys
 
 logging.basicConfig(filename='lightmeter.log',
                     level=logging.DEBUG,
@@ -16,7 +17,7 @@ def main_program():
         lmeter = Lightmeter()
     except usb.core.USBError as e:
         if e.errno != 13:
-                raise e
+            raise e
         logging.exception(e, file=sys.stderr)
         logging.error('Set read/write permissions on device node '
             '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus,e.address),
@@ -34,12 +35,12 @@ def main_program():
         logging.debug('writing database')
         lmeter.write_database(l)
         logging.debug('waiting for next cycle')
-        sleep(0.5)
+        #sleep(0.5)
 
 
 if __name__ == '__main__':
     logging.info('Starting daemon…')
-    stdin  = open('/dev/null', 'rb')
+    stdin = open('/dev/null', 'rb')
     stdout = open('lightmeter.info', 'w+b')
     stderr = open('lightmeter.err', 'w+b', buffering=0)
     context = daemon.DaemonContext(uid=1000,

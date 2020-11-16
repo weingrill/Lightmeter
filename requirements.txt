@@ -2,3 +2,4 @@ pyusb
 attrs
 pandas
 influxdb
+python-daemon
