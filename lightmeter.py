@@ -294,7 +294,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', action='store_true',
                         help='enable USB debug mode')
     parser.add_argument('-f', '--format', default='text',
-                        choices=('text', 'json_table', 'json_lines', 'json_lines_long', 'none'),
+                        choices=('text', 'log', 'none'),
                         help='output format')
 
     args = parser.parse_args()
@@ -317,20 +317,9 @@ if __name__ == '__main__':
 
     if args.format == 'text':
         print('# DATE_UTC TIME_UTC UNIX_EPOCH T_CELSIUS LIGHTMETER_COUNTS DAYLIGHT_LUX STATUS')
-    elif args.format == 'json_table':
-        import atexit
+        lmeter.connect_db()
 
-        print(jsonSchemaPrefix, end='')
-        printComma = ''
-
-
-        @atexit.register
-        def finish():
-            print('\n]}')
-
-    lmeter.connect_db()
     killer = GracefulKiller()
-
 
     def none_str_fmt(value, format_string):
         if value is None:
@@ -348,13 +337,10 @@ if __name__ == '__main__':
                   none_str_fmt(l.daylight, '{:.3g}'),
                   ('OK' if l.status else 'ERROR'),
                   flush=True)
-        elif args.format == 'json_lines':
-            print(l.json(abbrev=True), flush=True)
-        elif args.format == 'json_lines_long':
-            print(l.json(abbrev=False), flush=True)
-        elif args.format == 'json_table':
-            print(printComma, l.json(abbrev=True), end='', sep='\n', flush=True)
-            printComma = ','
+            lmeter.write_database(l)
+        elif args.format == 'log':
+            print(l.lightlevel, flush=True)
+            logger.info("%d", l.lightlevel)
         elif args.format == 'none':
             pass  # maybe used for logger in future
         else:
