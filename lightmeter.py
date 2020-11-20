@@ -357,6 +357,7 @@ if __name__ == '__main__':
             printComma = ','
         elif args.format == 'none':
             pass  # maybe used for logger in future
-        lmeter.write_database(l)
+        else:
+            lmeter.write_database(l)
         while starttime + dt.timedelta(seconds=args.interval) > dt.datetime.now():
             pass

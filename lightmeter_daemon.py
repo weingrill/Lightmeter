@@ -26,9 +26,7 @@ def main_program():
         exit(1)
     logging.debug('connecting database')
     lmeter.connect_db()
-#    killer = GracefulKiller()
 
-#    while not killer.kill_now:
     while True:
         logging.debug('reading lightmeter')
         l = lmeter.read()
