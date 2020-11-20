@@ -151,7 +151,7 @@ class Lightmeter:
             lightlevel = None
             daylight = None
             is_ok = False
-        if utc > self.suspend_time_utc:
+        if utc >= self.suspend_time_utc:
             try:
                 temperature = Lightmeter._read_temperature(self._endpoints)
             except RuntimeError as temperature_exception:
@@ -162,7 +162,7 @@ class Lightmeter:
                 self.suspend_time_utc = utc
         else:
             temperature = None
-        if temperature < 35.0:
+        if temperature is not None and temperature < 35.0:
             self.suspend_time_utc = utc
         else:   # wait for eight hours
             self.suspend_time_utc = utc + dt.timedelta(hours=12)
