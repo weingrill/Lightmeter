@@ -2,13 +2,14 @@
 import daemon
 import logging
 import usb.core
-from time import sleep
 from lightmeter import Lightmeter
 import sys
+import datetime as dt
 
 logging.basicConfig(filename='lightmeter.log',
                     level=logging.DEBUG,
                     format='%(asctime)s %(message)s')
+
 
 def main_program():
     logging.debug('main_program()')
@@ -28,12 +29,14 @@ def main_program():
     lmeter.connect_db()
 
     while True:
+        starttime = dt.datetime.now()
         logging.debug('reading lightmeter')
         l = lmeter.read()
         logging.debug('writing database')
         lmeter.write_database(l)
         logging.debug('waiting for next cycle')
-        #sleep(0.5)
+        while starttime + dt.timedelta(seconds=1) > dt.datetime.now():
+            pass
 
 
 if __name__ == '__main__':
