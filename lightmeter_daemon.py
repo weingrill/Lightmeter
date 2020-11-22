@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-import daemon
-import logging
-import usb.core
-from lightmeter import Lightmeter
-import sys
 import datetime as dt
+import logging
+import sys
+
+import daemon
+import usb.core
+
+from lightmeter import Lightmeter
 
 logging.basicConfig(filename='lightmeter.log',
                     level=logging.DEBUG,
@@ -13,27 +15,28 @@ logging.basicConfig(filename='lightmeter.log',
 
 def main_program():
     logging.debug('main_program()')
+    lmeter = None
     try:
         logging.info('connecting lightmeter')
         lmeter = Lightmeter()
+        logging.debug('connecting database')
+        lmeter.connect_db()
     except usb.core.USBError as e:
         if e.errno != 13:
             raise e
         logging.exception(e, file=sys.stderr)
         logging.error('Set read/write permissions on device node '
-            '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus,e.address),
-            file=sys.stderr)
+                      '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus, e.address),
+                      file=sys.stderr)
         logging.error('Alternatively, use udev to fix this permanently.')
         exit(1)
-    logging.debug('connecting database')
-    lmeter.connect_db()
 
     while True:
         starttime = dt.datetime.now()
         logging.debug('reading lightmeter')
-        l = lmeter.read()
+        lightmeter_reading = lmeter.read()
         logging.debug('writing database')
-        lmeter.write_database(l)
+        lmeter.write_database(lightmeter_reading)
         logging.debug('waiting for next cycle')
         while starttime + dt.timedelta(seconds=1) > dt.datetime.now():
             pass
