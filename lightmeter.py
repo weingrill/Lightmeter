@@ -228,10 +228,10 @@ class Lightmeter:
         endpoint_in, endpoint_out = endpoints
         n = endpoint_out.write('T')
         if n != 1:
-            raise RuntimeError('USB temperature write error')
+            raise RuntimeError('USB temperature write error %d' % n)
         raw = endpoint_in.read(2)
         if len(raw) != 2:
-            raise RuntimeError('USB temperature read error')
+            raise RuntimeError('USB temperature read error %d' % len(raw))
         # Throw away 3 status bits and convert to decimal.
         return (raw[0] // 8 + raw[1] * 32) / 16
 
