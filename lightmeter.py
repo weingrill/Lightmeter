@@ -4,7 +4,6 @@ import usb.core
 import usb.util
 import attr
 import datetime as dt
-from lightmeter_table import jsonSchemaPrefix
 import signal
 from influxdb import InfluxDBClient, exceptions
 from math import exp
@@ -162,6 +161,8 @@ class Lightmeter:
                 self.suspend_time_utc = utc
         else:
             temperature = None
+        if temperature > 60.0 or temperature < -30.0:
+            temperature = None
         if temperature is not None and temperature < 35.0:
             self.suspend_time_utc = utc
         else:   # wait for eight hours
@@ -265,7 +266,11 @@ class Lightmeter:
     @staticmethod
     def _read_light(endpoints):
         endpoint_in, endpoint_out = endpoints
-        n = endpoint_out.write('L')
+        try:
+            n = endpoint_out.write('L')
+        except usb.USBError:
+            logger.exception('USB Error')
+            return 0, 0, False
         if n != 1:
             raise RuntimeError('USB lightlevel write error')
         raw = endpoint_in.read(7)
