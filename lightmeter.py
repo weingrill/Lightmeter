@@ -89,7 +89,7 @@ class Lightmeter:
         connect the client to the database
         :return:
         """
-        logger.debug('connecting database')
+        logger.info('connecting database')
         self.client = InfluxDBClient('localhost', 8086,
                                      username='',
                                      password='',
@@ -107,7 +107,7 @@ class Lightmeter:
         write the data into the database
         :return:
         """
-
+        logger.info("write_database")
         if reading.temperature is None:
             watts = c * (b * (a * exp(reading.lightlevel / a) - 1.0) + reading.lightlevel)
         else:
@@ -142,6 +142,7 @@ class Lightmeter:
 
     def read(self):
         """Returns an instance of Lightmeter.Reading holding the current readings."""
+        logger.info("read")
         utc = dt.datetime.now(dt.timezone.utc)
         try:
             lightlevel, daylight, is_ok = Lightmeter._read_light(self._endpoints)
@@ -161,8 +162,10 @@ class Lightmeter:
                 self.suspend_time_utc = utc
         else:
             temperature = None
+            logger.info("temperature suspended")
         if temperature is not None and (temperature > 60.0 or temperature < -30.0):
             temperature = None
+            logger.warning("temperature out of range")
         if temperature is not None and temperature < 35.0:
             self.suspend_time_utc = utc
         else:   # wait for eight hours
@@ -176,6 +179,7 @@ class Lightmeter:
     def _init_device():
         """Finds a Microchip PICDEM, which is what the lightmeter identifies as,
         sadly. Not robust, but I can see no better way."""
+        logger.debug("_init_device")
         lightmeter_params = {
             'idVendor': 0x04d8,
             'idProduct': 0x000c,
@@ -233,6 +237,7 @@ class Lightmeter:
         if len(raw) != 2:
             raise RuntimeError('USB temperature read error %d' % len(raw))
         # Throw away 3 status bits and convert to decimal.
+        logger.debug('_read_temperature() = %d' % raw)
         return (raw[0] // 8 + raw[1] * 32) / 16
 
     @staticmethod
@@ -241,6 +246,7 @@ class Lightmeter:
             for the TMB-package.
             Code from the Kuffner-Sternwarte web site.
         """
+        logger.debug("_lux_from_daysensor")
         if channel0 > 0:
             channel_ratio = channel1 / channel0
         else:
@@ -265,6 +271,7 @@ class Lightmeter:
 
     @staticmethod
     def _read_light(endpoints):
+        logger.debug("_read_light")
         endpoint_in, endpoint_out = endpoints
         try:
             n = endpoint_out.write('L')
@@ -283,6 +290,8 @@ class Lightmeter:
         raw_reading = 256 * raw[1] + raw[0]
         reading = raw_reading * factors[measurement_range]
         is_ok = raw_reading < 32000
+        if not is_ok:
+            logger.warning("flux > 32000 non-linear")
         daylight = Lightmeter._lux_from_daysensor(low_word, high_word)
         return reading, daylight, is_ok
 
