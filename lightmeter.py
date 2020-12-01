@@ -161,7 +161,7 @@ class Lightmeter:
                 self.suspend_time_utc = utc
         else:
             temperature = None
-        if temperature > 60.0 or temperature < -30.0:
+        if temperature is not None and (temperature > 60.0 or temperature < -30.0):
             temperature = None
         if temperature is not None and temperature < 35.0:
             self.suspend_time_utc = utc
