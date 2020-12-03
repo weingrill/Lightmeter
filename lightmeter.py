@@ -153,7 +153,7 @@ class Lightmeter:
             is_ok = False
         if utc >= self.suspend_time_utc:
             try:
-                temperature = Lightmeter._read_temperature(self._endpoints)
+                temperature, status = Lightmeter._read_temperature(self._endpoints)
             except RuntimeError as temperature_exception:
                 logger.exception(temperature_exception)
                 temperature = None
@@ -164,13 +164,12 @@ class Lightmeter:
             temperature = None
             logger.info("temperature suspended")
         if temperature is not None:
-            if (temperature > 60.0 or temperature < -30.0):
+            if temperature > 60.0 or temperature < -30.0:
                 temperature = None
-            logger.warning("temperature out of range")
-        if temperature is not None and temperature < 35.0:
-            self.suspend_time_utc = utc
-        else:   # wait for eight hours
-            self.suspend_time_utc = utc + dt.timedelta(hours=12)
+            if temperature < 35.0:
+                self.suspend_time_utc = utc
+            else:   # wait for twelve hours
+                self.suspend_time_utc = utc + dt.timedelta(hours=12)
             logger.warning('suspending temperature readout until %s', self.suspend_time_utc.isoformat())
         return Lightmeter.Reading(utc=utc, lightlevel=lightlevel,
                                   daylight=daylight, temperature=temperature,
