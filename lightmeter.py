@@ -229,6 +229,14 @@ class Lightmeter:
 
     @staticmethod
     def _read_temperature(endpoints):
+        """
+        status = (bytelow & MaskStatusTemp) == 0        # Check if status bit == 0
+        valraw = ((bytehigh << 8)  + bytelow ) >> 3     # Statusbits ausblenden
+        val = 625.0 * valraw / 10000.0                  # Umrechnung von 1/16属 zu 1/10属
+
+        return val, status
+
+        """
         endpoint_in, endpoint_out = endpoints
         n = endpoint_out.write('T')
         if n != 1:
@@ -237,8 +245,14 @@ class Lightmeter:
         if len(raw) != 2:
             raise RuntimeError('USB temperature read error %d' % len(raw))
         # Throw away 3 status bits and convert to decimal.
-        logger.debug('_read_temperature() = %d' % raw)
-        return (raw[0] // 8 + raw[1] * 32) / 16
+        logger.debug('_read_temperature() = %x%x' % (raw[1], raw[0]))
+        raw_temp = raw[1] * 256 + raw[0]
+        status = raw_temp & 7
+        raw_temp = raw_temp >> 3
+        temperature = raw_temp / 16
+        if temperature > 127.0:
+            temperature = temperature - (0x7FFF >> 3) / 16
+        return temperature, status
 
     @staticmethod
     def _lux_from_daysensor(channel0, channel1):
