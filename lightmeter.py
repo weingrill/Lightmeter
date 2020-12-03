@@ -163,8 +163,9 @@ class Lightmeter:
         else:
             temperature = None
             logger.info("temperature suspended")
-        if temperature is not None and (temperature > 60.0 or temperature < -30.0):
-            temperature = None
+        if temperature is not None:
+            if (temperature > 60.0 or temperature < -30.0):
+                temperature = None
             logger.warning("temperature out of range")
         if temperature is not None and temperature < 35.0:
             self.suspend_time_utc = utc
