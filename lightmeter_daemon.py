@@ -5,6 +5,7 @@ import sys
 
 import daemon
 import usb.core
+import time
 
 from lightmeter import Lightmeter
 
@@ -21,12 +22,13 @@ def main_program():
         lmeter = Lightmeter()
         logging.debug('connecting database')
         lmeter.connect_db()
+        logging.debug('connect to MQTT broker')
+        lmeter.connect_mqtt()
     except usb.core.USBError as e:
         if e.errno != 13:
             raise e
         logging.exception(e, file=sys.stderr)
-        logging.error('Set read/write permissions on device node '
-                      '/dev/bus/usb/{:03d}/{:03d}'.format(e.bus, e.address),
+        logging.error('Set read/write permissions on device node /dev/bus/usb/{:03d}/{:03d}'.format(e.bus, e.address),
                       file=sys.stderr)
         logging.error('Alternatively, use udev to fix this permanently.')
         exit(1)
@@ -37,9 +39,10 @@ def main_program():
         lightmeter_reading = lmeter.read()
         logging.debug('writing database')
         lmeter.write_database(lightmeter_reading)
+        logging.debug('send MQTT telegram')
+        lmeter.send_mqtt(lightmeter_reading)
         logging.debug('waiting for next cycle')
-        while starttime + dt.timedelta(seconds=1) > dt.datetime.now():
-            pass
+        time.sleep(10)
 
 
 if __name__ == '__main__':

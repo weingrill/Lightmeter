@@ -5,12 +5,17 @@ import usb.util
 import attr
 import datetime as dt
 import signal
-from influxdb import InfluxDBClient, exceptions
+import influxdb_client
+from influxdb_client.client.write_api import SYNCHRONOUS
+from paho.mqtt import client as mqtt_client
+import time
+
 from math import exp
 import logging
 from logging.config import fileConfig
 import sys
 import argparse
+from _config import bucket, org, token, url, mqtt_broker, mqtt_port, client_id
 
 fileConfig('logging_config.ini')
 logger = logging.getLogger()
@@ -90,15 +95,22 @@ class Lightmeter:
         :return:
         """
         logger.info('connecting database')
-        self.client = InfluxDBClient('localhost', 8086,
-                                     username='',
-                                     password='',
-                                     database='lightmeterdb',
-                                     timeout=300)
+        self.client = influxdb_client.InfluxDBClient(
+            url=url,
+            token=token,
+            org=org
+        )
 
-        # if database does not exist, create the bmkdb. This does not overwrite an existing database
-        logger.debug('creating database')
-        self.client.create_database('lightmeterdb')
+    def connect_mqtt(self):
+        def on_connect(client, userdata, flags, rc):
+            if rc == 0:
+                logger.info("Connected to MQTT Broker!")
+            else:
+                logger.exception("Failed to connect, return code %d\n", rc)
+        # Set Connecting Client ID
+        self.mqtt_client = mqtt_client.Client(client_id)
+        self.mqtt_client.on_connect = on_connect
+        self.mqtt_client.connect(mqtt_broker, mqtt_port)
 
     def write_database(self, reading):
         """
@@ -108,37 +120,47 @@ class Lightmeter:
         :return:
         """
         logger.info("write_database")
-        if reading.temperature is None:
-            watts = c * (b * (a * exp(reading.lightlevel / a) - 1.0) + reading.lightlevel)
-        else:
-            watts = c * (b * (
-                        a * exp(reading.lightlevel * (1.0 + d * reading.temperature) / a) - 1.0) + reading.lightlevel)
+        
+        watts = reading.daylight / 119.0
 
-        json_body = [
-            {
-                "measurement": "Lightmeter",
-                "tags": {
-                    "host": "Mark 2.3 V05.05",
-                    "serial": "908026.1447"
-                },
-                "time": reading.utc.isoformat(),
-                "fields": {
-                    "temperature": reading.temperature,
-                    "lightlevel": reading.lightlevel,
-                    "daylight": reading.daylight,
-                    "lux": a * reading.lightlevel,
-                    "watts": watts,
-                    "status": reading.status
-                }
+        data_dict = {
+            "name": "Lightmeter",
+            "device": "Mark 2.3 V05.05",
+            "serial": "908026.1447",
+            "time": reading.utc.isoformat(),
+            "counts": reading.lightlevel,
+            "daylight": reading.daylight,
+            "lux": a * reading.lightlevel,
+            "watts": watts,
+            "status": reading.status
             }
-        ]
-        if reading.temperature is None:
-            json_body[0]["fields"].pop("temperature")
+        # Write script
+        write_api = self.client.write_api(write_options=SYNCHRONOUS)
+
+        point = influxdb_client.Point.from_dict(data_dict,
+                                write_precision=influxdb_client.WritePrecision.S,
+                                record_measurement_key="name",
+                                record_time_key="time",
+                                record_tag_keys=["device", "serial"],
+                                record_field_keys=["counts", "daylight", "lux", "watts"])
+
         logger.debug('writing database')
         try:
-            self.client.write_points(json_body)
-        except exceptions.InfluxDBServerError:
+            write_api.write(bucket=bucket, org=org, record=point)
+        except:
             logger.exception('write_points failed')
+
+    def send_mqtt(self, reading):
+        """sends MQTT telegram to broker"""
+        msg = '{"Time":"%s","TSL2560":{"Illuminance":%d}}' % (reading.utc.isoformat(),reading.daylight)
+        topic = "tele/Lightmeter/SENSOR"
+        result = self.mqtt_client.publish(topic, msg)
+        # result: [0, 1]
+        status = result[0]
+        if status == 0:
+            logger.debug("MQTT message sent: ",msg)
+        else:
+            logger.exception(f"Failed to send MQTT message")
 
     def read(self):
         """Returns an instance of Lightmeter.Reading holding the current readings."""
@@ -280,8 +302,8 @@ class Lightmeter:
             lux = 0
         else:
             raise RuntimeError("Invalid daysensor channel ratio.")
-        # calibration with Voltcraft handheld vs. Lightmeter Mark 2.3 No. L001 TAOS-daysensor
-        factor = 21.0
+        # calibration with Thies Clima US
+        factor = 130.0
         return lux * factor
 
     @staticmethod
@@ -316,7 +338,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Read light level from a '
                                                  'Kuffner-Sternwarte lightmeter '
                                                  'mark 2.3')
-    parser.add_argument('-i', '--interval', type=float, default=1.0,
+    parser.add_argument('-i', '--interval', type=float, default=10.0,
                         help='sampling interval in minutes (can be fractional)')
     parser.add_argument('--nohw', action='store_true',
                         help='don\'t use hardware and instead generate mock readings for testing')
@@ -347,6 +369,7 @@ if __name__ == '__main__':
     if args.format == 'text':
         print('# DATE_UTC TIME_UTC UNIX_EPOCH T_CELSIUS LIGHTMETER_COUNTS DAYLIGHT_LUX STATUS')
         lmeter.connect_db()
+        lmeter.connect_mqtt()
 
     killer = GracefulKiller()
 
@@ -367,6 +390,7 @@ if __name__ == '__main__':
                   ('OK' if l.status else 'ERROR'),
                   flush=True)
             lmeter.write_database(l)
+            lmeter.send_mqtt(l)
         elif args.format == 'log':
             print(l.lightlevel, flush=True)
             logger.info("%d", l.lightlevel)
@@ -374,5 +398,4 @@ if __name__ == '__main__':
             pass  # maybe used for logger in future
         else:
             lmeter.write_database(l)
-        while starttime + dt.timedelta(seconds=args.interval) > dt.datetime.now():
-            pass
+        time.sleep(args.interval)

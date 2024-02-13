@@ -86,6 +86,11 @@ generated with a timestamped name and measurements will be stored as
 `json_table`. The receiver opens a new file for each connection and can even
 handle multiple senders.
 
+## References
+
+Lux to Watts per square meter:
+https://www.researchgate.net/publication/347362859_A_conversion_guide_solar_irradiance_and_lux_illuminance
+
 ## Authors
 
 This software is written and maintained by [Jure
