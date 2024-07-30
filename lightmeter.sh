@@ -2,10 +2,10 @@
 if pgrep -x "python3" > /dev/null; then
     echo "running"
 else
-    cd /home/debian/Kuffner-Sternwarte-Lightmeter
-    source venv/bin/activate
+    cd /home/debian/Lightmeter
+#    source venv/bin/activate
     python3 lightmeter_daemon.py
-    deactivate
+#    deactivate
 fi
 
 if [ -s lightmeter.err ]; then
