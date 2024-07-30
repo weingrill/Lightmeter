@@ -5,8 +5,6 @@ import usb.util
 import attr
 import datetime as dt
 import signal
-import influxdb_client
-from influxdb_client.client.write_api import SYNCHRONOUS
 from paho.mqtt import client as mqtt_client
 import time
 
@@ -24,7 +22,7 @@ a = 1.4434e+05
 b = 3.25274e-03
 c = 1.3120e-08
 d = 5.2776e-03
-
+lux_factor = 153.423
 
 class GracefulKiller:
     """
@@ -52,7 +50,6 @@ class GracefulKiller:
 class Lightmeter:
     """An instance of a Kuffner-Sternwarte lightmeter. Call `read` to read the
     timestamped light levels."""
-
     @attr.s(frozen=True)
     class Reading:
         """A lightmeter reading.
@@ -85,21 +82,8 @@ class Lightmeter:
             return '{{{}}}'.format(line)
 
     def __init__(self):
-        self.client = None
         self._endpoints = Lightmeter._init_device()
         self.suspend_time_utc = dt.datetime.now(dt.timezone.utc)
-
-    def connect_db(self):
-        """
-        connect the client to the database
-        :return:
-        """
-        logger.info('connecting database')
-        self.client = influxdb_client.InfluxDBClient(
-            url=url,
-            token=token,
-            org=org
-        )
 
     def connect_mqtt(self):
         def on_connect(client, userdata, flags, rc):
@@ -111,44 +95,6 @@ class Lightmeter:
         self.mqtt_client = mqtt_client.Client(client_id)
         self.mqtt_client.on_connect = on_connect
         self.mqtt_client.connect(mqtt_broker, mqtt_port)
-
-    def write_database(self, reading):
-        """
-        reads all variables from the input variable dictionary.
-        compiles the JSON body
-        write the data into the database
-        :return:
-        """
-        logger.info("write_database")
-        
-        watts = reading.daylight / 119.0
-
-        data_dict = {
-            "name": "Lightmeter",
-            "device": "Mark 2.3 V05.05",
-            "serial": "908026.1447",
-            "time": reading.utc.isoformat(),
-            "counts": reading.lightlevel,
-            "daylight": reading.daylight,
-            "lux": a * reading.lightlevel,
-            "watts": watts,
-            "status": reading.status
-            }
-        # Write script
-        write_api = self.client.write_api(write_options=SYNCHRONOUS)
-
-        point = influxdb_client.Point.from_dict(data_dict,
-                                write_precision=influxdb_client.WritePrecision.S,
-                                record_measurement_key="name",
-                                record_time_key="time",
-                                record_tag_keys=["device", "serial"],
-                                record_field_keys=["counts", "daylight", "lux", "watts"])
-
-        logger.debug('writing database')
-        try:
-            write_api.write(bucket=bucket, org=org, record=point)
-        except:
-            logger.exception('write_points failed')
 
     def send_mqtt(self, reading):
         """sends MQTT telegram to broker"""
@@ -194,6 +140,8 @@ class Lightmeter:
             else:   # wait for twelve hours
                 self.suspend_time_utc = utc + dt.timedelta(hours=12)
             logger.warning('suspending temperature readout until %s', self.suspend_time_utc.isoformat())
+        if daylight < 3.0:
+            daylight = lightlevel / 145000.0
         return Lightmeter.Reading(utc=utc, lightlevel=lightlevel,
                                   daylight=daylight, temperature=temperature,
                                   status=is_ok)
@@ -284,6 +232,7 @@ class Lightmeter:
             Code from the Kuffner-Sternwarte web site.
         """
         logger.debug("_lux_from_daysensor")
+        global lux_factor
         if channel0 > 0:
             channel_ratio = channel1 / channel0
         else:
@@ -303,8 +252,11 @@ class Lightmeter:
         else:
             raise RuntimeError("Invalid daysensor channel ratio.")
         # calibration with Thies Clima US
-        factor = 130.0
-        return lux * factor
+        if lux * lux_factor > 120000.0:
+            lux_factor *= 120000.0 / (lux*lux_factor)
+            logger.info('setting new lux_factor = %f' % lux_factor)
+            print(lux_factor)
+        return lux * lux_factor
 
     @staticmethod
     def _read_light(endpoints):
@@ -368,7 +320,6 @@ if __name__ == '__main__':
 
     if args.format == 'text':
         print('# DATE_UTC TIME_UTC UNIX_EPOCH T_CELSIUS LIGHTMETER_COUNTS DAYLIGHT_LUX STATUS')
-        lmeter.connect_db()
         lmeter.connect_mqtt()
 
     killer = GracefulKiller()
@@ -386,16 +337,11 @@ if __name__ == '__main__':
                   int(l.utc.timestamp()),
                   none_str_fmt(l.temperature, '{:.1f}'),
                   l.lightlevel,
-                  none_str_fmt(l.daylight, '{:.3g}'),
+                  none_str_fmt(l.daylight, '{:8.1f}'),
                   ('OK' if l.status else 'ERROR'),
                   flush=True)
-            lmeter.write_database(l)
             lmeter.send_mqtt(l)
         elif args.format == 'log':
             print(l.lightlevel, flush=True)
             logger.info("%d", l.lightlevel)
-        elif args.format == 'none':
-            pass  # maybe used for logger in future
-        else:
-            lmeter.write_database(l)
         time.sleep(args.interval)
